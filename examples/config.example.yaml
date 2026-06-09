@@ -1,0 +1,55 @@
+# Example config. Generate a real one with:
+#   gform import "https://docs.google.com/forms/d/e/XXXX/viewform" -o config.yaml
+form:
+  url: "https://docs.google.com/forms/d/e/XXXX/viewform"
+
+generation:
+  count: 1000          # how many responses to generate
+  seed: 42             # same seed + same config => identical responses
+  mode: exact          # exact (quota-matched) | probabilistic (sampled)
+
+submission:
+  enabled: false       # must be true to submit to the live form
+  i_own_this_form: false  # attest you own / are authorized to test this form
+  rate_limit_per_min: 20
+  jitter_seconds: [1, 3]
+  stop_on_error: true
+
+questions:
+  # Single-choice (radio / dropdown / linear_scale): distribution must sum to 1.0
+  - entry_id: "123456789"
+    title: "Favorite color"
+    type: radio
+    distribution:
+      Red: 0.6
+      Blue: 0.3
+      Green: 0.1
+
+  # Checkbox: each value is an INDEPENDENT inclusion probability in [0, 1]
+  - entry_id: "987654321"
+    title: "Which features do you use?"
+    type: checkbox
+    distribution:
+      Search: 0.7
+      Export: 0.4
+      Sharing: 0.2
+
+  # Grids expand to one entry PER ROW. A multiple-choice grid row (lưới trắc
+  # nghiệm) is "grid_radio" and its column distribution must sum to 1.0:
+  - entry_id: "111222333"
+    title: "Satisfaction [Service]"   # "<grid title> [<row label>]"
+    type: grid_radio
+    distribution:
+      Poor: 0.1
+      OK: 0.3
+      Great: 0.6
+
+  # A checkbox grid row (lưới hộp kiểm) is "grid_checkbox"; columns are
+  # independent inclusion probabilities in [0, 1]:
+  - entry_id: "444555666"
+    title: "Availability [Week 1]"
+    type: grid_checkbox
+    distribution:
+      Mon: 0.5
+      Wed: 0.5
+      Fri: 0.2

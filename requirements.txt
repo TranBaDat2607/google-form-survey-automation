@@ -1,0 +1,12 @@
+# Runtime dependencies (see pyproject.toml for the authoritative list).
+# Install with:  pip install -r requirements.txt
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pydantic>=2.5
+pyyaml>=6.0
+typer>=0.12
+rich>=13.7
+
+# Dev / test (optional):
+#   pip install -r requirements-dev.txt
