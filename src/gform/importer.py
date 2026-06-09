@@ -13,7 +13,7 @@ from typing import Optional
 
 import requests
 
-from .models import FormSchema, Question, QuestionType, TYPE_CODE_MAP
+from .models import FormSchema, OTHER_OPTION, Question, QuestionType, TYPE_CODE_MAP
 
 # A plain, current browser UA so Google serves the normal public form page.
 # This is NOT an evasion measure; the tool refuses sign-in-gated forms outright.
@@ -32,6 +32,15 @@ _FILE_UPLOAD_CODE = 13
 # grid is a separate answer entry, and r[11] flags radio (0) vs checkbox (1).
 _GRID_CODE = 7
 _GRID_CHECKBOX_FLAG_INDEX = 11
+# An option is the free-text "Other" choice when opt[4] == 1 (its label is "").
+_OTHER_FLAG_INDEX = 4
+
+
+def _option_label(opt) -> str:
+    """Label for one raw option, mapping the "Other" choice to its sentinel."""
+    if len(opt) > _OTHER_FLAG_INDEX and opt[_OTHER_FLAG_INDEX] == 1:
+        return OTHER_OPTION
+    return str(opt[0])
 
 
 class FormAccessError(RuntimeError):
@@ -153,7 +162,7 @@ def parse_form(html: str, url: str, final_url: Optional[str] = None) -> FormSche
         entry = entries[0]
         entry_id = str(entry[0])
         raw_opts = entry[1] or []
-        options = [str(opt[0]) for opt in raw_opts if opt]
+        options = [_option_label(opt) for opt in raw_opts if opt]
         required = bool(entry[2]) if len(entry) > 2 else False
 
         questions.append(

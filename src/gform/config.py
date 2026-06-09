@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import yaml
 from pydantic import BaseModel, Field
 
-from .models import MULTI_CHOICE, FormSchema, QuestionType
+from .models import MULTI_CHOICE, OTHER_OPTION, FormSchema, QuestionType
 
 # Tolerance for "distribution sums to 1.0" on single-choice questions.
 _SUM_TOLERANCE = 1e-3
@@ -36,6 +36,8 @@ class QuestionConfig(BaseModel):
     title: str = ""
     type: QuestionType
     distribution: Dict[str, float]
+    # Free text submitted when the "Other" option (key __other__) is chosen.
+    other_text: str = ""
 
 
 class Config(BaseModel):
@@ -87,6 +89,14 @@ def validate_internal(config: Config) -> None:
                 errors.append(
                     f"{tag}: distribution sums to {total:.4f}, must sum to 1.0"
                 )
+
+        # Google rejects an "Other" selection with no free text, so require
+        # other_text whenever __other__ can actually be chosen.
+        if qc.distribution.get(OTHER_OPTION, 0) > 0 and not qc.other_text.strip():
+            errors.append(
+                f"{tag}: distribution includes the '{OTHER_OPTION}' (Other) option "
+                f"but other_text is empty; set the free text to submit for it"
+            )
 
     if errors:
         raise ConfigError("Config validation failed:\n  - " + "\n  - ".join(errors))
@@ -141,14 +151,16 @@ def scaffold_dict(schema: FormSchema, count: int, seed: int) -> dict:
             distribution = {opt: p for opt in opts}
             # Absorb rounding drift into the last option so the sum is exactly 1.
             distribution[opts[-1]] = round(1.0 - p * (len(opts) - 1), 6)
-        questions.append(
-            {
-                "entry_id": q.entry_id,
-                "title": q.title,
-                "type": q.type.value,
-                "distribution": distribution,
-            }
-        )
+        question = {
+            "entry_id": q.entry_id,
+            "title": q.title,
+            "type": q.type.value,
+            "distribution": distribution,
+        }
+        # If the form offers an "Other" fill-in, seed an editable default text.
+        if OTHER_OPTION in opts:
+            question["other_text"] = "Other"
+        questions.append(question)
 
     return {
         "form": {"url": schema.url},

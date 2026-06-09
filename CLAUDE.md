@@ -51,6 +51,17 @@ under `src/gform/`, with `models.py` holding the shared Pydantic types
   importer path. Unsupported codes (text, date, time, file-upload, layout) are
   skipped on import with a warning.
 
+  **"Other" (fill-in-the-blank) options** are detected in the importer by the
+  per-option flag `opt[4] == 1` (their label is empty) and mapped to the
+  `OTHER_OPTION` sentinel (`__other__`) rather than leaking in as an empty-label
+  choice. `__other__` is a normal selectable option in the config (it gets a
+  probability like any other). Each question may carry an `other_text` string;
+  when `__other__` is selected, `build_payload` rewrites the value to Google's
+  `OTHER_SUBMIT_VALUE` (`__other_option__`) and adds a sibling
+  `entry.<id>.other_option_response=<other_text>` field. `validate_internal`
+  requires `other_text` to be non-empty whenever `__other__` has positive
+  probability (Google rejects an empty Other response).
+
 - **config.py** — YAML config schema + three validation layers:
   `validate_internal` (offline: single-choice distributions sum to 1.0 within
   `_SUM_TOLERANCE`; checkbox values are independent probabilities in [0,1]),

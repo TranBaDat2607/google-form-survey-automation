@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from gform.importer import FormAccessError, parse_form
-from gform.models import QuestionType
+from gform.models import OTHER_OPTION, QuestionType
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_form.html"
 URL = "https://docs.google.com/forms/d/e/1FAIpQLScTESTFORMID/viewform"
@@ -39,6 +39,14 @@ def test_rating_parsed_as_single_choice_over_values():
     rating = next(q for q in _schema().questions if q.entry_id == "888888")
     assert rating.type == QuestionType.rating
     assert rating.options == ["1", "2", "3", "4", "5"]
+
+
+def test_other_option_mapped_to_sentinel():
+    # The free-text "Other" choice (opt flag == 1, empty label) must import as
+    # the __other__ sentinel, not as an empty-label option.
+    role = next(q for q in _schema().questions if q.entry_id == "999999")
+    assert role.options == ["Student", "Teacher", OTHER_OPTION]
+    assert "" not in role.options
 
 
 def test_options_and_required():

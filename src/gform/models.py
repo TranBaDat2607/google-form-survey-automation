@@ -8,6 +8,14 @@ from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 
+# Config-facing label for a multiple-choice "Other" (fill-in-the-blank) option,
+# and the magic value Google expects in the POST body when it is selected. When
+# "Other" is chosen the submit also needs a sibling
+# `entry.<id>.other_option_response=<text>` field carrying the free text.
+OTHER_OPTION = "__other__"
+OTHER_SUBMIT_VALUE = "__other_option__"
+
+
 class QuestionType(str, Enum):
     """The choice-based question types we support.
 

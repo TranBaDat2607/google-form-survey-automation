@@ -19,7 +19,7 @@ import requests
 
 from .config import Config
 from .importer import DEFAULT_UA, _FB_RE
-from .models import Response
+from .models import OTHER_OPTION, OTHER_SUBMIT_VALUE, Response
 
 # Markers Google renders on the (English) "response recorded" confirmation page.
 CONFIRM_MARKERS = (
@@ -42,13 +42,35 @@ def response_url(form_url: str) -> str:
     return base.rstrip("/") + "/formResponse"
 
 
-def build_payload(response: Response, fbzx: Optional[str] = None) -> dict:
+def build_payload(
+    response: Response,
+    fbzx: Optional[str] = None,
+    other_texts: Optional[dict] = None,
+) -> dict:
     """Build the urlencoded POST body for one response.
 
     Single-choice answers map to one value; checkbox answers map to a list,
     which requests serializes as repeated entry.<id>=... keys.
+
+    The "Other" sentinel (OTHER_OPTION) is rewritten to Google's
+    OTHER_SUBMIT_VALUE, and a sibling ``entry.<id>.other_option_response`` field
+    is added carrying the free text from ``other_texts`` (entry_id -> text).
     """
-    data: dict = {f"entry.{eid}": val for eid, val in response.answers.items()}
+    other_texts = other_texts or {}
+    data: dict = {}
+    for eid, val in response.answers.items():
+        key = f"entry.{eid}"
+        if isinstance(val, list):
+            chose_other = OTHER_OPTION in val
+            data[key] = [
+                OTHER_SUBMIT_VALUE if v == OTHER_OPTION else v for v in val
+            ]
+        else:
+            chose_other = val == OTHER_OPTION
+            data[key] = OTHER_SUBMIT_VALUE if chose_other else val
+        if chose_other:
+            data[f"{key}.other_option_response"] = other_texts.get(eid, "")
+
     data["fvv"] = "1"
     data["pageHistory"] = "0"
     if fbzx:
@@ -125,9 +147,11 @@ def submit_all(
     session = requests.Session()
     session.headers.update({"User-Agent": DEFAULT_UA})
 
+    other_texts = {qc.entry_id: qc.other_text for qc in config.questions}
+
     rows: List[dict] = []
     for i, resp in enumerate(responses):
-        payload = build_payload(resp, fbzx)
+        payload = build_payload(resp, fbzx, other_texts)
 
         if dry_run:
             rows.append(

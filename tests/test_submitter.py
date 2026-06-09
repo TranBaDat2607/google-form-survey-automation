@@ -45,6 +45,32 @@ def test_build_payload_shape():
     assert payload["fbzx"] == "ZZ"
 
 
+def test_build_payload_other_radio():
+    # A radio "Other" answer becomes the magic value plus the free-text field.
+    payload = build_payload(
+        Response(answers={"111111": "__other__"}),
+        other_texts={"111111": "Custom role"},
+    )
+    assert payload["entry.111111"] == "__other_option__"
+    assert payload["entry.111111.other_option_response"] == "Custom role"
+
+
+def test_build_payload_other_checkbox_mixed():
+    # A checkbox "Other" mixed with a real choice: real value kept, sentinel
+    # rewritten, and a single other_option_response added for that entry.
+    payload = build_payload(
+        Response(answers={"333333": ["A", "__other__"]}),
+        other_texts={"333333": "Something else"},
+    )
+    assert payload["entry.333333"] == ["A", "__other_option__"]
+    assert payload["entry.333333.other_option_response"] == "Something else"
+
+
+def test_build_payload_no_other_has_no_response_field():
+    payload = build_payload(Response(answers={"111111": "Red"}), other_texts={"111111": "x"})
+    assert "entry.111111.other_option_response" not in payload
+
+
 def test_gate_blocks_when_not_enabled():
     responses = generate(make_cfg())
     with pytest.raises(SubmissionNotAuthorized):
