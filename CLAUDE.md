@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`gform` is a Python CLI that deterministically generates multiple-choice survey
-responses from user-defined distributions and submits them to a Google Form you
-own (testing/QA). It is **intentionally non-evasive**: there are no proxy/UA
-rotation, CAPTCHA, or sign-in bypass features. If a form requires authentication
-the tool reports and refuses rather than working around it. Preserve this stance
-when changing the importer or submitter.
+`gform` is a Python **MCP server** (stdio, FastMCP) that authors Google Forms
+through the official Forms API and deterministically generates/submits survey
+responses from user-defined distributions to forms the user owns (testing/QA).
+It is **intentionally non-evasive**: there are no proxy/UA rotation, CAPTCHA,
+or sign-in bypass features. If a form requires authentication the tool reports
+and refuses rather than working around it, and `fill_form` refuses without an
+explicit `i_own_this_form=true`. Preserve this stance when changing the
+importer, submitter, or server.
 
 ## Commands
 
@@ -17,90 +19,104 @@ when changing the importer or submitter.
 pip install -e ".[dev]"   # install with dev/test extras (pytest, responses)
 pytest                     # run all tests (fully offline — see below)
 pytest tests/test_importer.py::test_name   # single test
-```
 
-CLI (installed as the `gform` entry point → `gform.cli:main`):
-
-```powershell
-gform import "<viewform-url>" -o config.yaml   # scaffold config from a live form
-gform preview config.yaml                       # offline: target vs realized marginals + sample rows
-gform run config.yaml --dry-run                 # build POST payloads, submit nothing
-gform run config.yaml                            # submit (requires ownership gate, see below)
+gform-auth                 # one-time interactive Google OAuth (token -> ~/.gform/token.json)
+gform-mcp                  # run the MCP server on stdio (registered via `claude mcp add`)
 ```
 
 ## Architecture
 
-The pipeline is **import → config → generate → submit**, one module per stage
-under `src/gform/`, with `models.py` holding the shared Pydantic types
-(`QuestionType`, `Question`, `FormSchema`, `Response`) that flow between them.
+Two halves that complement each other — the official API cannot submit
+responses, and the public endpoint cannot author forms:
+
+1. **Authoring** (OAuth): `auth.py` + `forms_api.py`, surfaced as the
+   `create_form` / `publish_form` / `add_text_question` /
+   `add_multiple_choice_question` / `get_form` / `get_form_responses` tools.
+2. **Filling** (no auth): the original pipeline import → config → generate →
+   submit, surfaced as `import_form_schema` / `preview_fill` / `fill_form`.
+   The `entry.<id>` POST field IDs it scrapes are **unrelated** to the
+   authoring `question_id`s.
+
+Modules under `src/gform/`:
+
+- **server.py** — FastMCP app wiring all 9 tools; `gform-mcp` entry point.
+  A `tool_errors` decorator maps AuthError / FormAccessError / ConfigError /
+  SubmissionNotAuthorized / googleapiclient HttpError / ValueError to readable
+  `ToolError`s (never tracebacks). **Never print to stdout here** — stdio is
+  the MCP transport; logging goes to stderr. The discovery service is cached
+  module-level. Fill tools always hit the live form first to validate labels
+  and capture a fresh `fbzx` token.
+
+- **auth.py** — OAuth credential cache under `GFORM_HOME` (default `~/.gform`):
+  `credentials.json` (client secret), `token.json` (cached token), `logs/`.
+  `get_credentials(interactive=False)` is what the server uses — it loads/
+  refreshes the token and raises `AuthError` with run-`gform-auth` instructions
+  rather than ever opening a browser. The interactive flow lives only in the
+  standalone `gform-auth` entry point (`main()`); keep it that way (a browser
+  flow inside the stdio server would block and corrupt the protocol). Tokens
+  whose stored scopes don't cover `SCOPES` are treated as absent.
+
+- **forms_api.py** — Thin wrappers over forms.googleapis.com; every function
+  takes the discovery `service` as first arg so tests inject a recording fake.
+  `create_form` publishes explicitly after creating (API-created forms start
+  unpublished since the June 30, 2026 Forms API change; legacy forms that
+  reject `setPublishSettings` are reported as `legacy_default`). `createItem`
+  appends by computing the index from `forms.get` when no index is given.
+  `list_responses` flattens answers to `question_id -> [values]`.
 
 - **importer.py** — Fetches the viewform page and parses the undocumented
   `FB_PUBLIC_LOAD_DATA_` JSON blob. All brittle nested-index access is isolated
   here behind `_safe_index` and guarded by a fixture test. The resolved
   (post-redirect) URL is stored so short links (`forms.gle/...`) become the
-  canonical `docs.google.com/.../viewform` from which the `/formResponse` submit
-  endpoint is derived. Google internal type codes map to our types via
+  canonical `docs.google.com/.../viewform` from which the `/formResponse`
+  submit endpoint is derived. Google internal type codes map to our types via
   `TYPE_CODE_MAP` in models.py.
 
 - **models.py** — Defines the supported question types. **Grids (type code 7)
-  are decomposed at import time into one `Question` per row**: a multiple-choice
-  grid row becomes `grid_radio`, a checkbox grid row becomes `grid_checkbox`.
-  `SINGLE_CHOICE` vs `MULTI_CHOICE` sets drive distribution semantics everywhere
-  downstream. A rating question (type code 18) is structurally a radio over its
-  1..N rating values, so it maps onto `rating` (single-choice) via the generic
-  importer path. Unsupported codes (text, date, time, file-upload, layout) are
-  skipped on import with a warning.
+  are decomposed at import time into one `Question` per row** (`grid_radio` /
+  `grid_checkbox`). A rating question (code 18) maps onto `rating`
+  (single-choice). **Text questions (codes 0/1) import as `text`/`paragraph`**
+  with `options=[]`; they are in `TEXT_TYPES`, deliberately NOT in
+  `SINGLE_CHOICE`/`MULTI_CHOICE`. Unsupported codes (date, time, file-upload,
+  layout) are skipped on import with a warning.
 
-  **"Other" (fill-in-the-blank) options** are detected in the importer by the
-  per-option flag `opt[4] == 1` (their label is empty) and mapped to the
-  `OTHER_OPTION` sentinel (`__other__`) rather than leaking in as an empty-label
-  choice. `__other__` is a normal selectable option in the config (it gets a
-  probability like any other). Each question may carry an `other_text` string;
-  when `__other__` is selected, `build_payload` rewrites the value to Google's
-  `OTHER_SUBMIT_VALUE` (`__other_option__`) and adds a sibling
-  `entry.<id>.other_option_response=<other_text>` field. `validate_internal`
-  requires `other_text` to be non-empty whenever `__other__` has positive
-  probability (Google rejects an empty Other response).
+  **"Other" (fill-in-the-blank) options** are detected by the per-option flag
+  `opt[4] == 1` and mapped to the `OTHER_OPTION` sentinel (`__other__`). When
+  selected, `build_payload` rewrites the value to `OTHER_SUBMIT_VALUE`
+  (`__other_option__`) plus a sibling `entry.<id>.other_option_response`
+  field; `validate_internal` requires a non-empty `other_text` whenever
+  `__other__` has positive probability.
 
-- **config.py** — YAML config schema + three validation layers:
-  `validate_internal` (offline: single-choice distributions sum to 1.0 within
-  `_SUM_TOLERANCE`; checkbox values are independent probabilities in [0,1]),
-  `validate_against_schema` (option labels must match the live form exactly;
-  required questions must be present), and `scaffold_dict` (generates a config
-  with uniform distributions, absorbing rounding drift into the last option).
+- **config.py** — Pydantic config models (no file format; configs are built
+  inline from MCP tool args). For **text questions, `distribution` doubles as
+  the answer pool** (sample text → weight): `validate_internal` requires a
+  non-empty pool with weights > 0 and exempts it from the sum-to-1 rule;
+  `validate_against_schema` skips the option-label check for text but errors
+  on text-vs-choice type mismatches; `scaffold_dict` emits text questions with
+  an empty `{}` pool for the user to fill in.
 
 - **generator.py / distributions.py** — Each question is sampled
-  **independently** (columns generated separately, then zipped into rows, so
-  questions are uncorrelated by construction). Two modes:
-  - `exact` (default): proportions → integer quotas via the **largest-remainder
-    method** (`largest_remainder`), then a seeded shuffle. Realized marginals
-    match targets as closely as integer rounding allows.
-  - `probabilistic`: seeded weighted sampling.
-  Checkbox questions treat each option as an independent inclusion decision.
-  **Determinism is a core invariant**: same config + seed ⇒ identical responses.
-  Per-column/per-option seeds are derived from the base seed + index — preserve
-  this seeding scheme so existing seeds keep reproducing.
+  **independently**. `exact` mode: largest-remainder quotas + seeded shuffle;
+  `probabilistic`: seeded weighted sampling. Text pools are normalized then
+  routed through the same single-choice column path. **Determinism is a core
+  invariant**: same config + seed ⇒ identical responses; per-column seeds are
+  `base seed + question index` (checkbox options: `"{seed}-{idx}-{opt_idx}"`)
+  — preserve this scheme so existing seeds keep reproducing.
 
-- **submitter.py** — Two-part ownership gate (`submission.enabled` AND
-  `submission.i_own_this_form`, checked in `_check_gate`; `run` adds an
-  interactive `YES` prompt unless `--yes`). Rate-limited with seeded jitter.
-  **Success classification is non-obvious**: Forms returns HTTP 200 for both
-  success and (some) validation failures. The current confirmation page embeds
-  `FB_PUBLIC_LOAD_DATA_` too, so its mere presence is *not* a failure signal.
-  The two outcomes differ structurally instead: a re-rendered form (failure)
-  still carries the questions list at `data[1][1]`, while the confirmation page
-  omits it — so `is_success` treats a populated questions list as the
-  language-independent failure signal. Writes a per-run audit CSV
-  (`run-<seed>.csv`).
-
-- **cli.py** — Typer app wiring the stages together. Note `run` always hits the
-  live form first (even before submitting) to confirm accessibility, validate
-  option labels, and capture a fresh `fbzx` token.
+- **submitter.py** — Ownership gate in `_check_gate` (`submission.enabled` AND
+  `i_own_this_form`), seeded-jitter rate limiting, audit CSV. **Success
+  classification is non-obvious**: Forms returns HTTP 200 for both success and
+  some validation failures; `is_success` treats a populated questions list at
+  `data[1][1]` as the language-independent failure signal (a confirmation page
+  omits it). `build_payload` takes `text_entry_ids` so a literal `"__other__"`
+  text answer is never rewritten to the Other magic value.
 
 ## Testing
 
-All tests run **offline**: the importer is tested against a captured HTML
-fixture (`tests/fixtures/sample_form.html`), and submission is tested with the
-network mocked via the `responses` library. Do not introduce tests that make
-real network calls. When changing `FB_PUBLIC_LOAD_DATA_` parsing, update or
-re-capture the fixture rather than hardcoding indices in tests.
+All tests run **offline**: the importer against a captured HTML fixture
+(`tests/fixtures/sample_form.html`), submission with the network mocked via
+`responses`, the official-API wrappers against a hand-rolled recording
+`FakeService` (asserting exact request bodies), and the server's tool registry
+via FastMCP's `list_tools`. Do not introduce tests that make real network
+calls. When changing `FB_PUBLIC_LOAD_DATA_` parsing, update or re-capture the
+fixture rather than hardcoding indices in tests.
