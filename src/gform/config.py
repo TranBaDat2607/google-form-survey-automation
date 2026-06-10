@@ -1,10 +1,13 @@
-"""Config schema, loading, validation, and scaffolding."""
+"""Config schema, validation, and scaffolding.
+
+Configs are plain dicts/JSON (built inline by MCP tool calls); there is no
+file-based config format anymore.
+"""
 
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-import yaml
 from pydantic import BaseModel, Field
 
 from .models import MULTI_CHOICE, OTHER_OPTION, TEXT_TYPES, FormSchema, QuestionType
@@ -52,14 +55,6 @@ class Config(BaseModel):
 
 class ConfigError(ValueError):
     """Raised when a config is internally inconsistent or doesn't match a form."""
-
-
-def load_config(path) -> Config:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
-    if not isinstance(data, dict):
-        raise ConfigError("Config file must be a YAML mapping.")
-    return Config(**data)
 
 
 def validate_internal(config: Config) -> None:
