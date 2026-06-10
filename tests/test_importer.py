@@ -58,11 +58,24 @@ def test_options_and_required():
     assert scale.options == ["1", "2", "3", "4", "5"]
 
 
+def test_text_questions_imported():
+    qmap = {q.entry_id: q for q in _schema().questions}
+    name = qmap["555555"]
+    assert name.type == QuestionType.text
+    assert name.options == []
+    assert name.required is False
+
+    feedback = qmap["666666"]
+    assert feedback.type == QuestionType.paragraph
+    assert feedback.options == []
+    assert feedback.required is True
+
+
 def test_unsupported_skipped_with_warning():
     schema = _schema()
     ids = {q.entry_id for q in schema.questions}
-    assert "555555" not in ids  # short-answer text question skipped
-    assert any("Name" in w for w in schema.warnings)
+    assert "777777" not in ids  # date question skipped
+    assert any("Birthday" in w for w in schema.warnings)
 
 
 def test_multiple_choice_grid_expanded_to_rows():

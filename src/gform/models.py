@@ -17,11 +17,14 @@ OTHER_SUBMIT_VALUE = "__other_option__"
 
 
 class QuestionType(str, Enum):
-    """The choice-based question types we support.
+    """The question types we support.
 
     Grid questions (multiple-choice grid / checkbox grid) are decomposed at
     import time into one question PER ROW: a grid row behaves exactly like a
     radio (grid_radio) or a checkbox (grid_checkbox) over its column options.
+
+    Text questions (short answer / paragraph) have no fixed options; they are
+    filled from a user-provided pool of sample answers with weights.
     """
 
     radio = "radio"
@@ -31,15 +34,19 @@ class QuestionType(str, Enum):
     rating = "rating"                # star/icon rating; single choice over 1..N
     grid_radio = "grid_radio"        # one row of a multiple-choice grid
     grid_checkbox = "grid_checkbox"  # one row of a checkbox grid
+    text = "text"                    # short-answer free text
+    paragraph = "paragraph"          # long-answer free text
 
 
 # Google Forms internal type codes (from FB_PUBLIC_LOAD_DATA_) -> our types.
 # Type 7 (grids) is handled specially in the importer (it expands into rows and
 # the radio-vs-checkbox flag lives per-row), so it is not in this map. A rating
 # question (code 18) is structurally a radio over its rating values (1..N), so
-# it maps straight onto our single-choice handling. Codes not covered (0/1 text,
-# 9 date, 10 time, 13 file, 6/8/11 layout) are intentionally skipped on import.
+# it maps straight onto our single-choice handling. Codes not covered (9 date,
+# 10 time, 13 file, 6/8/11 layout) are intentionally skipped on import.
 TYPE_CODE_MAP: Dict[int, QuestionType] = {
+    0: QuestionType.text,
+    1: QuestionType.paragraph,
     2: QuestionType.radio,
     3: QuestionType.dropdown,
     4: QuestionType.checkbox,
@@ -59,9 +66,14 @@ SINGLE_CHOICE = {
 # Types that take a set of answers (independent per-option inclusion).
 MULTI_CHOICE = {QuestionType.checkbox, QuestionType.grid_checkbox}
 
+# Free-text types: no fixed options; answers come from a weighted sample pool.
+# Deliberately NOT in SINGLE_CHOICE/MULTI_CHOICE (those mean "choice over the
+# form's fixed options"), even though sampling reuses the single-choice path.
+TEXT_TYPES = {QuestionType.text, QuestionType.paragraph}
+
 
 class Question(BaseModel):
-    """A single multiple-choice question parsed from a live form."""
+    """A single question parsed from a live form (options is [] for text)."""
 
     entry_id: str
     title: str
