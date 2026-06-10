@@ -12,7 +12,20 @@ from typing import List, Union
 
 from .config import Config, QuestionConfig
 from .distributions import build_quota_column, largest_remainder, weighted_choices
-from .models import MULTI_CHOICE, Response
+from .models import MULTI_CHOICE, TEXT_TYPES, Response
+
+
+def _normalize_pool(qc: QuestionConfig) -> QuestionConfig:
+    """Normalize a text-question answer pool so weights sum to 1.
+
+    This keeps unnormalized pools (e.g. {a: 2, b: 2}) bit-identical to their
+    normalized form, and lets text questions reuse the single-choice sampling
+    path unchanged.
+    """
+    total = sum(qc.distribution.values())
+    return qc.model_copy(
+        update={"distribution": {k: v / total for k, v in qc.distribution.items()}}
+    )
 
 
 def _single_column(qc: QuestionConfig, n: int, seed: int, idx: int, mode: str) -> List[str]:
@@ -54,6 +67,11 @@ def generate(config: Config) -> List[Response]:
         if qc.type in MULTI_CHOICE:
             columns[qc.entry_id] = _checkbox_column(qc, n, seed, idx, mode)
         else:
+            # Text pools sample exactly like a single-choice question over the
+            # pool texts; the per-column seed scheme (seed + idx) is shared so
+            # existing seeds keep reproducing.
+            if qc.type in TEXT_TYPES:
+                qc = _normalize_pool(qc)
             columns[qc.entry_id] = _single_column(qc, n, seed, idx, mode)
 
     return [

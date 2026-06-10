@@ -13,13 +13,13 @@ import json
 import random
 import time
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Set
 
 import requests
 
 from .config import Config
 from .importer import DEFAULT_UA, _FB_RE
-from .models import OTHER_OPTION, OTHER_SUBMIT_VALUE, Response
+from .models import OTHER_OPTION, OTHER_SUBMIT_VALUE, TEXT_TYPES, Response
 
 # Markers Google renders on the (English) "response recorded" confirmation page.
 CONFIRM_MARKERS = (
@@ -46,20 +46,27 @@ def build_payload(
     response: Response,
     fbzx: Optional[str] = None,
     other_texts: Optional[dict] = None,
+    text_entry_ids: Optional[Set[str]] = None,
 ) -> dict:
     """Build the urlencoded POST body for one response.
 
     Single-choice answers map to one value; checkbox answers map to a list,
-    which requests serializes as repeated entry.<id>=... keys.
+    which requests serializes as repeated entry.<id>=... keys. Free-text
+    answers (entry ids in ``text_entry_ids``) are submitted verbatim.
 
     The "Other" sentinel (OTHER_OPTION) is rewritten to Google's
     OTHER_SUBMIT_VALUE, and a sibling ``entry.<id>.other_option_response`` field
     is added carrying the free text from ``other_texts`` (entry_id -> text).
     """
     other_texts = other_texts or {}
+    text_entry_ids = text_entry_ids or set()
     data: dict = {}
     for eid, val in response.answers.items():
         key = f"entry.{eid}"
+        if eid in text_entry_ids:
+            # A literal "__other__" in a text answer must not be rewritten.
+            data[key] = val
+            continue
         if isinstance(val, list):
             chose_other = OTHER_OPTION in val
             data[key] = [
@@ -148,10 +155,11 @@ def submit_all(
     session.headers.update({"User-Agent": DEFAULT_UA})
 
     other_texts = {qc.entry_id: qc.other_text for qc in config.questions}
+    text_ids = {qc.entry_id for qc in config.questions if qc.type in TEXT_TYPES}
 
     rows: List[dict] = []
     for i, resp in enumerate(responses):
-        payload = build_payload(resp, fbzx, other_texts)
+        payload = build_payload(resp, fbzx, other_texts, text_ids)
 
         if dry_run:
             rows.append(

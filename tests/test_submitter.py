@@ -71,6 +71,39 @@ def test_build_payload_no_other_has_no_response_field():
     assert "entry.111111.other_option_response" not in payload
 
 
+def test_build_payload_text_answer_verbatim():
+    payload = build_payload(
+        Response(answers={"555555": "Free text answer"}),
+        text_entry_ids={"555555"},
+    )
+    assert payload["entry.555555"] == "Free text answer"
+
+
+def test_build_payload_text_literal_other_not_rewritten():
+    # A text answer that happens to equal the sentinel must pass through
+    # untouched (no magic value, no other_option_response sibling).
+    payload = build_payload(
+        Response(answers={"555555": "__other__"}),
+        other_texts={"555555": "x"},
+        text_entry_ids={"555555"},
+    )
+    assert payload["entry.555555"] == "__other__"
+    assert "entry.555555.other_option_response" not in payload
+
+
+def test_submit_all_passes_text_ids_from_config():
+    cfg = Config(
+        form={"url": "https://docs.google.com/forms/d/e/ID/viewform"},
+        generation={"count": 1, "seed": 1},
+        questions=[
+            {"entry_id": "555555", "title": "Name", "type": "text",
+             "distribution": {"__other__": 1.0}},
+        ],
+    )
+    rows = submit_all(generate(cfg), cfg, dry_run=True)
+    assert rows[0]["payload"]["entry.555555"] == "__other__"
+
+
 def test_gate_blocks_when_not_enabled():
     responses = generate(make_cfg())
     with pytest.raises(SubmissionNotAuthorized):

@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import yaml
 from pydantic import BaseModel, Field
 
-from .models import MULTI_CHOICE, OTHER_OPTION, FormSchema, QuestionType
+from .models import MULTI_CHOICE, OTHER_OPTION, TEXT_TYPES, FormSchema, QuestionType
 
 # Tolerance for "distribution sums to 1.0" on single-choice questions.
 _SUM_TOLERANCE = 1e-3
@@ -35,6 +35,9 @@ class QuestionConfig(BaseModel):
     entry_id: str
     title: str = ""
     type: QuestionType
+    # For choice questions: option label -> probability. For text/paragraph
+    # questions this doubles as the answer POOL: sample text -> weight
+    # (weights are normalized at generation time, no sum-to-1 constraint).
     distribution: Dict[str, float]
     # Free text submitted when the "Other" option (key __other__) is chosen.
     other_text: str = ""
@@ -71,7 +74,22 @@ def validate_internal(config: Config) -> None:
     for qc in config.questions:
         tag = f"[{qc.entry_id}] '{qc.title}'"
         if not qc.distribution:
-            errors.append(f"{tag}: distribution is empty")
+            if qc.type in TEXT_TYPES:
+                errors.append(
+                    f"{tag}: text questions need a pool of sample answers "
+                    f"(distribution maps answer text -> weight)"
+                )
+            else:
+                errors.append(f"{tag}: distribution is empty")
+            continue
+        if qc.type in TEXT_TYPES:
+            # Pool weights are normalized at generation time, so there is no
+            # sum-to-1 constraint — only that every weight is usable.
+            for label, p in qc.distribution.items():
+                if p <= 0:
+                    errors.append(
+                        f"{tag} pool answer '{label}': weight must be > 0 (got {p})"
+                    )
             continue
         for label, p in qc.distribution.items():
             if p < 0:
@@ -116,6 +134,15 @@ def validate_against_schema(config: Config, schema: FormSchema) -> None:
                 f"question on the live form"
             )
             continue
+        if (qc.type in TEXT_TYPES) != (q.type in TEXT_TYPES):
+            errors.append(
+                f"[{qc.entry_id}] config type '{qc.type.value}' does not match "
+                f"the live form question type '{q.type.value}'"
+            )
+            continue
+        if qc.type in TEXT_TYPES:
+            # Free-text answers have no fixed options to match.
+            continue
         valid = set(q.options)
         for label in qc.distribution:
             if label not in valid:
@@ -142,6 +169,19 @@ def scaffold_dict(schema: FormSchema, count: int, seed: int) -> dict:
     questions = []
     for q in schema.questions:
         opts = q.options
+        if q.type in TEXT_TYPES:
+            # Empty pool on purpose: the user must supply sample answers (and
+            # weights) before the config validates. Emitting the question keeps
+            # required-question coverage visible.
+            questions.append(
+                {
+                    "entry_id": q.entry_id,
+                    "title": q.title,
+                    "type": q.type.value,
+                    "distribution": {},
+                }
+            )
+            continue
         if not opts:
             continue
         if q.type in MULTI_CHOICE:
