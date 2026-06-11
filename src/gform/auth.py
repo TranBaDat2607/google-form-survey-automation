@@ -23,6 +23,12 @@ from google.oauth2.credentials import Credentials
 SCOPES = [
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/forms.responses.readonly",
+    # Drive access is used solely to set a created form's sharing to
+    # "anyone with the link" so a Workspace (organization) account doesn't
+    # produce sign-in-gated forms that the public filling tools can't reach.
+    # The Forms API exposes no responder-access field; it mirrors the
+    # underlying Drive file's link sharing, so this is the only API route.
+    "https://www.googleapis.com/auth/drive",
 ]
 
 FORMS_DISCOVERY_URL = "https://forms.googleapis.com/$discovery/rest?version=v1"
@@ -130,6 +136,13 @@ def build_forms_service():
         discoveryServiceUrl=FORMS_DISCOVERY_URL,
         static_discovery=False,
     )
+
+
+def build_drive_service():
+    """Build the Drive v3 client (used only to set a form's link sharing)."""
+    from googleapiclient.discovery import build
+
+    return build("drive", "v3", credentials=get_credentials(interactive=False))
 
 
 def main() -> None:

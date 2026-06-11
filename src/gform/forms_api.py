@@ -107,6 +107,28 @@ def create_form(
     }
 
 
+def share_with_anyone(drive_service, form_id: str) -> dict:
+    """Make a form publicly responder-accessible (no sign-in required).
+
+    Workspace (organization) accounts create forms restricted to the org, so
+    the public responder page returns 401 to anonymous visitors and the
+    no-auth filling tools can't reach it. The Forms API has no responder-access
+    field; that access mirrors the underlying Drive file's link sharing, so the
+    only programmatic route is granting ``anyone: reader`` on the Drive file.
+
+    Returns ``{"public_access": "anyone_with_link"}`` on success. Raises
+    HttpError if the org's admin sharing policy forbids anyone-with-link
+    sharing (the caller turns that into a readable message + a personal-account
+    fallback hint, rather than letting it surface later as an opaque 401).
+    """
+    drive_service.permissions().create(
+        fileId=form_id,
+        body={"type": "anyone", "role": "reader"},
+        fields="id",
+    ).execute()
+    return {"public_access": "anyone_with_link"}
+
+
 def _create_item(service, form_id: str, item: dict, index: Optional[int]) -> dict:
     """createItem at ``index`` (append at the end when index is None)."""
     if index is None:

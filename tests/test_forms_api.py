@@ -14,6 +14,7 @@ from gform.forms_api import (
     get_form,
     list_responses,
     set_publish_settings,
+    share_with_anyone,
 )
 
 
@@ -130,6 +131,40 @@ def test_create_form_description_and_document_title():
         }
     ]
     assert svc.call("setPublishSettings") == []
+
+
+class _FakePermissions:
+    def __init__(self, recorder):
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.append(("permissions.create", kwargs))
+        return _Call({"id": "anyoneWithLink"})
+
+
+class FakeDriveService:
+    def __init__(self):
+        self.calls = []
+
+    def permissions(self):
+        return _FakePermissions(self.calls)
+
+    def call(self, name):
+        return [kwargs for method, kwargs in self.calls if method == name]
+
+
+def test_share_with_anyone_grants_link_reader():
+    drive = FakeDriveService()
+    result = share_with_anyone(drive, "F1")
+
+    assert drive.call("permissions.create") == [
+        {
+            "fileId": "F1",
+            "body": {"type": "anyone", "role": "reader"},
+            "fields": "id",
+        }
+    ]
+    assert result == {"public_access": "anyone_with_link"}
 
 
 def test_set_publish_settings_close_form():

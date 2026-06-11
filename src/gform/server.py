@@ -28,7 +28,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from . import forms_api
-from .auth import AuthError, build_forms_service, logs_dir
+from .auth import AuthError, build_drive_service, build_forms_service, logs_dir
 from .config import (
     Config,
     ConfigError,
@@ -65,6 +65,7 @@ import_form_schema (or use its suggested_fill_config) to get them.
 mcp = FastMCP("gform", instructions=INSTRUCTIONS)
 
 _service = None
+_drive_service = None
 
 
 def _get_service():
@@ -72,6 +73,13 @@ def _get_service():
     if _service is None:
         _service = build_forms_service()
     return _service
+
+
+def _get_drive_service():
+    global _drive_service
+    if _drive_service is None:
+        _drive_service = build_drive_service()
+    return _drive_service
 
 
 def _format_http_error(exc: HttpError) -> str:
@@ -130,6 +138,7 @@ def create_form(
     description: str = "",
     document_title: str = "",
     publish: bool = True,
+    public: bool = True,
 ) -> dict:
     """Create a new Google Form owned by the authorized account.
 
@@ -137,11 +146,36 @@ def create_form(
     (API-created forms start unpublished). Returns form_id, the responder_uri
     (public fill-out URL — feed it to import_form_schema/fill_form), and the
     edit URL.
+
+    public=true (default) additionally sets the form's sharing to "anyone with
+    the link" so it does NOT require sign-in — important for Workspace
+    (organization) accounts, whose forms are otherwise org-restricted and make
+    the filling tools hit a 401. If your org's admin policy forbids
+    anyone-with-link sharing, this can't override it: the result reports
+    public_access="blocked" with guidance to re-auth with a personal Google
+    account, instead of leaving you to discover the 401 later.
     """
-    return forms_api.create_form(
+    result = forms_api.create_form(
         _get_service(), title, description=description,
         document_title=document_title, publish=publish,
     )
+    if public and publish:
+        try:
+            result.update(
+                forms_api.share_with_anyone(_get_drive_service(), result["form_id"])
+            )
+        except HttpError as exc:
+            result["public_access"] = "blocked"
+            result["public_access_error"] = (
+                "Created and published the form, but could not make it public "
+                "(no sign-in). This is usually a Google Workspace admin policy "
+                "that forbids 'anyone-with-the-link' sharing. The form will "
+                "require organization sign-in, so the no-auth filling tools "
+                "(import_form_schema/fill_form) will get a 401. To get a "
+                "fillable test form, run `gform-auth --reauth` with a PERSONAL "
+                f"Google account and recreate it. Detail: {_format_http_error(exc)}"
+            )
+    return result
 
 
 @mcp.tool()
