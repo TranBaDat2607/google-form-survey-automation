@@ -2,7 +2,23 @@
 name = "nmvv-gform-mcp"
 version = "0.2.0"
 description = "Google Forms MCP server: authoring via the official Forms API plus deterministic survey-response filling for forms you own."
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
+authors = [{ name = "nammovuivui", email = "tranbadat26072004@gmail.com" }]
+keywords = ["mcp", "google-forms", "survey", "automation", "fastmcp", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Office/Business",
+]
 dependencies = [
     "requests>=2.31",
     "pydantic>=2.5",
@@ -15,6 +31,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "responses>=0.25"]
+
+[project.urls]
+Homepage = "https://github.com/TranBaDat2607/nmvv-gform-mcp"
+Repository = "https://github.com/TranBaDat2607/nmvv-gform-mcp"
+Issues = "https://github.com/TranBaDat2607/nmvv-gform-mcp/issues"
 
 [project.scripts]
 gform-mcp = "gform.server:main"
