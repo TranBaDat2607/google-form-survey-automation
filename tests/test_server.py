@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError
 from mcp.server.fastmcp.exceptions import ToolError
 
 from gform.auth import AuthError
-from gform.config import ConfigError, QuestionConfig
+from gform.config import ConfigError, Persona, QuestionConfig
 from gform.importer import FormAccessError
 from gform.server import (
     fill_form,
@@ -121,6 +121,46 @@ def test_preview_fill_marginals_and_samples():
     assert result["marginals"]["111111"] == {"Red": 2, "Blue": 1, "Green": 1}
     assert result["marginals"]["666666"] == {"Great service": 3, "Could be better": 1}
     assert len(result["sample_rows"]) == 4
+
+
+@responses_lib.activate
+def test_preview_fill_with_personas_returns_mix_and_correlates():
+    responses_lib.add(responses_lib.GET, URL, body=FIXTURE, status=200)
+    personas = [
+        Persona(name="fan", weight=0.5, distributions={
+            "111111": {"Red": 1.0, "Blue": 0.0, "Green": 0.0},
+            "666666": {"Best form ever": 1.0},
+        }),
+        Persona(name="critic", weight=0.5, distributions={
+            "111111": {"Red": 0.0, "Blue": 0.0, "Green": 1.0},
+            "666666": {"Needs work": 1.0},
+        }),
+    ]
+    result = preview_fill(URL, _questions(), count=10, seed=1, personas=personas)
+
+    assert result["persona_mix"] == {"fan": 5, "critic": 5}
+    assert result["marginals"]["111111"] == {"Red": 5, "Green": 5}
+    # Within-respondent correlation survives end-to-end: the rating and the
+    # free-text comment come from the same persona on every row.
+    for row in result["sample_rows"]:
+        if row["111111"] == "Red":
+            assert row["666666"] == "Best form ever"
+        if row["111111"] == "Green":
+            assert row["666666"] == "Needs work"
+
+
+@responses_lib.activate
+def test_import_form_schema_includes_persona_template():
+    responses_lib.add(responses_lib.GET, URL, body=FIXTURE, status=200)
+    result = import_form_schema(URL)
+
+    assert "persona_guidance" in result
+    template = result["persona_template"]
+    # Wired to real entry_ids and weights sum to 1.0.
+    assert sum(p["weight"] for p in template["personas"]) == pytest.approx(1.0)
+    ids = {q["entry_id"] for q in result["questions"]}
+    for persona in template["personas"]:
+        assert set(persona["distributions"]) <= ids
 
 
 @responses_lib.activate

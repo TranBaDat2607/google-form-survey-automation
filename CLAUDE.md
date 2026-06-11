@@ -45,7 +45,11 @@ Modules under `src/gform/`:
   `ToolError`s (never tracebacks). **Never print to stdout here** — stdio is
   the MCP transport; logging goes to stderr. The discovery service is cached
   module-level. Fill tools always hit the live form first to validate labels
-  and capture a fresh `fbzx` token.
+  and capture a fresh `fbzx` token. `preview_fill`/`fill_form` take an optional
+  `personas` arg (see config.py); `import_form_schema` also returns
+  `persona_guidance` + a `persona_template` wired to the form's entry_ids to
+  steer the agent toward realistic, correlated data, and `preview_fill` echoes
+  the allocated `persona_mix`.
 
 - **auth.py** — OAuth credential cache under `GFORM_HOME` (default `~/.gform`):
   `credentials.json` (client secret), `token.json` (cached token), `logs/`.
@@ -93,15 +97,30 @@ Modules under `src/gform/`:
   non-empty pool with weights > 0 and exempts it from the sum-to-1 rule;
   `validate_against_schema` skips the option-label check for text but errors
   on text-vs-choice type mismatches; `scaffold_dict` emits text questions with
-  an empty `{}` pool for the user to fill in.
+  an empty `{}` pool for the user to fill in. Per-question distribution checks
+  live in the reusable `_validate_distribution` helper, applied to both base
+  questions and persona overrides.
 
-- **generator.py / distributions.py** — Each question is sampled
-  **independently**. `exact` mode: largest-remainder quotas + seeded shuffle;
-  `probabilistic`: seeded weighted sampling. Text pools are normalized then
-  routed through the same single-choice column path. **Determinism is a core
-  invariant**: same config + seed ⇒ identical responses; per-column seeds are
-  `base seed + question index` (checkbox options: `"{seed}-{idx}-{opt_idx}"`)
-  — preserve this scheme so existing seeds keep reproducing.
+  **Personas** (optional `Config.personas`) are respondent archetypes: each has
+  a `weight` (share of respondents, summing to 1.0) and `distributions`
+  (entry_id → its own distribution, falling back to the base question
+  distribution for any entry it omits). They exist so a respondent's answers
+  **correlate** across questions (rating + free text agree), which independent
+  per-question sampling cannot do. The agent authors them — the server only
+  validates/generates. `other_text` stays per-question (shared across personas).
+
+- **generator.py / distributions.py** — Without personas, each question is
+  sampled **independently** (the `_generate_block` column engine). `exact` mode:
+  largest-remainder quotas + seeded shuffle; `probabilistic`: seeded weighted
+  sampling. Text pools are normalized then routed through the same single-choice
+  column path. **With personas**, `generate` apportions respondents to personas
+  via `largest_remainder`, runs `_generate_block` once per persona over its
+  *effective* distributions with a strided block seed
+  (`seed + (persona_index+1) * 100_003`), then seeded-shuffles the rows.
+  **Determinism is a core invariant**: same config + seed ⇒ identical responses;
+  per-column seeds are `base seed + question index` (checkbox options:
+  `"{seed}-{idx}-{opt_idx}"`) — preserve this scheme so existing seeds keep
+  reproducing. The no-persona path is bit-identical to before the persona work.
 
 - **submitter.py** — Ownership gate in `_check_gate` (`submission.enabled` AND
   `i_own_this_form`), seeded-jitter rate limiting, audit CSV. **Success

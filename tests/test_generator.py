@@ -120,6 +120,83 @@ def test_text_pool_deterministic_per_seed():
     assert a == b
 
 
+def make_persona_cfg(count=100, seed=7, mode="exact"):
+    """Two opposite archetypes over a radio + a text question.
+
+    'happy' always rates High and writes the happy comment; 'sad' is the
+    mirror image. The base distributions are deliberately different so we can
+    tell overrides (not the base) drove the answers.
+    """
+    return Config(
+        form={"url": "https://x/viewform"},
+        generation={"count": count, "seed": seed, "mode": mode},
+        questions=[
+            {"entry_id": "111111", "title": "Rating", "type": "radio",
+             "distribution": {"High": 0.5, "Low": 0.5}},
+            {"entry_id": "222222", "title": "Comment", "type": "text",
+             "distribution": {"meh": 1.0}},
+        ],
+        personas=[
+            {"name": "happy", "weight": 0.7, "distributions": {
+                "111111": {"High": 1.0, "Low": 0.0},
+                "222222": {"Loved it": 1.0},
+            }},
+            {"name": "sad", "weight": 0.3, "distributions": {
+                "111111": {"High": 0.0, "Low": 1.0},
+                "222222": {"Hated it": 1.0},
+            }},
+        ],
+    )
+
+
+def test_persona_allocation_and_correlation():
+    responses = generate(make_persona_cfg(count=100, seed=7))
+    assert len(responses) == 100
+    high = [r for r in responses if r.answers["111111"] == "High"]
+    low = [r for r in responses if r.answers["111111"] == "Low"]
+    # weights 0.7 / 0.3 over 100 -> exact block sizes.
+    assert len(high) == 70
+    assert len(low) == 30
+    # Within-respondent correlation: the rating and the free text agree.
+    assert all(r.answers["222222"] == "Loved it" for r in high)
+    assert all(r.answers["222222"] == "Hated it" for r in low)
+
+
+def test_persona_full_determinism():
+    a = [r.answers for r in generate(make_persona_cfg())]
+    b = [r.answers for r in generate(make_persona_cfg())]
+    assert a == b
+
+
+def test_persona_falls_back_to_base_distribution():
+    # 'only' overrides the radio but not the text question -> text uses the base.
+    cfg = Config(
+        form={"url": "https://x/viewform"},
+        generation={"count": 10, "seed": 3, "mode": "exact"},
+        questions=[
+            {"entry_id": "111111", "title": "R", "type": "radio",
+             "distribution": {"A": 0.5, "B": 0.5}},
+            {"entry_id": "222222", "title": "C", "type": "text",
+             "distribution": {"base-answer": 1.0}},
+        ],
+        personas=[
+            {"name": "only", "weight": 1.0,
+             "distributions": {"111111": {"A": 1.0, "B": 0.0}}},
+        ],
+    )
+    responses = generate(cfg)
+    assert all(r.answers["111111"] == "A" for r in responses)            # override
+    assert all(r.answers["222222"] == "base-answer" for r in responses)  # fallback
+
+
+def test_no_personas_is_unchanged():
+    # An empty personas list must reproduce the independent-column path exactly.
+    with_empty = Config(**{**make_cfg().model_dump(), "personas": []})
+    a = [r.answers for r in generate(make_cfg())]
+    b = [r.answers for r in generate(with_empty)]
+    assert a == b
+
+
 def test_text_column_uses_same_seed_scheme_as_choice():
     # A text question must not perturb the per-column seeds of questions
     # around it: the choice column at index 0 is identical whether the text

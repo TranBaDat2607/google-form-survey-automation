@@ -109,6 +109,73 @@ def test_scaffold_emits_text_question_with_empty_pool():
     assert text_q["distribution"] == {}
 
 
+def _persona_cfg(personas, questions=None):
+    return Config(
+        form={"url": "https://x/viewform"},
+        generation={"count": 10, "seed": 1},
+        questions=questions or [
+            {"entry_id": "111111", "title": "R", "type": "radio",
+             "distribution": {"A": 0.5, "B": 0.5}},
+        ],
+        personas=personas,
+    )
+
+
+def test_persona_weights_must_sum_to_one():
+    with pytest.raises(ConfigError, match="persona weights sum to"):
+        validate_internal(_persona_cfg([
+            {"name": "a", "weight": 0.5, "distributions": {}},
+            {"name": "b", "weight": 0.2, "distributions": {}},
+        ]))
+
+
+def test_persona_unknown_entry_id_rejected():
+    with pytest.raises(ConfigError, match="not a configured question"):
+        validate_internal(_persona_cfg([
+            {"name": "a", "weight": 1.0, "distributions": {"999999": {"A": 1.0}}},
+        ]))
+
+
+def test_persona_override_distribution_obeys_base_rules():
+    # A single-choice override that doesn't sum to 1.0 is rejected, just like a
+    # base distribution would be.
+    with pytest.raises(ConfigError, match="must sum to 1.0"):
+        validate_internal(_persona_cfg([
+            {"name": "a", "weight": 1.0,
+             "distributions": {"111111": {"A": 0.6, "B": 0.6}}},
+        ]))
+
+
+def test_persona_other_without_text_rejected():
+    cfg = Config(
+        form={"url": "https://x/viewform"},
+        generation={"count": 5, "seed": 1},
+        questions=[
+            {"entry_id": "111111", "title": "Role", "type": "radio",
+             "distribution": {"Student": 1.0}, "other_text": ""},
+        ],
+        personas=[
+            {"name": "a", "weight": 1.0,
+             "distributions": {"111111": {"Student": 0.5, OTHER_OPTION: 0.5}}},
+        ],
+    )
+    with pytest.raises(ConfigError, match="other_text is empty"):
+        validate_internal(cfg)
+
+
+def test_persona_override_label_mismatch_caught_by_schema():
+    cfg = _persona_cfg([
+        {"name": "a", "weight": 1.0, "distributions": {"111111": {"Crimson": 1.0}}},
+    ])
+    schema = FormSchema(
+        title="T", form_id="ID", url="https://x/viewform",
+        questions=[Question(entry_id="111111", title="R", type=QuestionType.radio,
+                            options=["A", "B"])],
+    )
+    with pytest.raises(ConfigError, match="does not match any choice"):
+        validate_against_schema(cfg, schema)
+
+
 def test_scaffold_includes_other_option_and_default_text():
     schema = FormSchema(
         title="T", form_id="ID", url="https://x/viewform",

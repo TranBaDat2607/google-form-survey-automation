@@ -32,14 +32,15 @@ from .auth import AuthError, build_drive_service, build_forms_service, logs_dir
 from .config import (
     Config,
     ConfigError,
+    Persona,
     QuestionConfig,
     scaffold_dict,
     validate_against_schema,
     validate_internal,
 )
-from .generator import generate
+from .generator import allocate_personas, generate
 from .importer import FormAccessError, import_form
-from .models import MULTI_CHOICE, FormSchema
+from .models import MULTI_CHOICE, SINGLE_CHOICE, TEXT_TYPES, FormSchema
 from .submitter import SubmissionNotAuthorized, response_url, submit_all
 
 logger = logging.getLogger("gform")
@@ -60,7 +61,31 @@ gated forms are refused, and submissions are rate-limited.
 Note: the entry IDs used by the filling tools come from the public form page
 and are NOT the question_ids returned by the authoring tools — always call
 import_form_schema (or use its suggested_fill_config) to get them.
+
+For realistic data, pass `personas` to preview_fill/fill_form: each respondent
+is then drawn from one archetype so their answers correlate (a satisfied
+respondent rates high AND writes praise). See import_form_schema's
+persona_guidance/persona_template. Without personas, every question is sampled
+independently.
 """
+
+# Steering shown to the agent so it authors realistic, correlated personas
+# instead of independent uniform distributions.
+PERSONA_GUIDANCE = (
+    "To make responses look like real survey data, define `personas` and pass "
+    "them to preview_fill/fill_form. Each persona is one respondent archetype "
+    "with a `weight` (share of respondents; weights sum to 1.0) and "
+    "`distributions` mapping entry_id -> that persona's own distribution. "
+    "Infer 2-5 archetypes from the form's topic (e.g. satisfied / neutral / "
+    "unhappy) and give each a coherent, NON-UNIFORM shape: a persona's rating, "
+    "choices, and free-text pool should agree with each other. A persona only "
+    "needs to list questions it answers differently; omitted entry_ids fall back "
+    "to the base `questions` distribution (still provide valid base distributions "
+    "— the suggested_fill_config gives uniform ones to start). For free-text "
+    "questions, give each persona its OWN distinct pool of on-topic sample "
+    "answers; supplying ~count/persona distinct equal-weight phrasings makes each "
+    "respondent's text effectively unique under exact mode."
+)
 
 mcp = FastMCP("gform", instructions=INSTRUCTIONS)
 
@@ -275,6 +300,7 @@ def _build_config(
     count: int,
     seed: int,
     mode: str,
+    personas: Optional[List[Persona]] = None,
     i_own_this_form: bool = False,
     rate_limit_per_min: float = 20.0,
     jitter_seconds: Tuple[float, float] = (1.0, 3.0),
@@ -291,6 +317,7 @@ def _build_config(
             "stop_on_error": stop_on_error,
         },
         questions=questions,
+        personas=personas or [],
     )
     validate_internal(cfg)
     validate_against_schema(cfg, schema)
@@ -310,6 +337,48 @@ def _marginals(cfg: Config, responses) -> dict:
     return out
 
 
+def _persona_template(schema: FormSchema) -> dict:
+    """Build an illustrative 2-persona example wired to this form's real ids.
+
+    The weights/shapes are placeholders to show structure — the agent should
+    replace them with archetypes and sentiment that actually fit the form.
+    """
+    choice_q = next(
+        (q for q in schema.questions if q.type in SINGLE_CHOICE and q.options), None
+    )
+    text_q = next((q for q in schema.questions if q.type in TEXT_TYPES), None)
+
+    def _biased(options: List[str], heavy_first: bool) -> dict:
+        heavy = options[0] if heavy_first else options[-1]
+        rest = [o for o in options if o != heavy]
+        share = round(0.15 / len(rest), 4) if rest else 0.0
+        dist = {o: share for o in rest}
+        dist[heavy] = round(1.0 - share * len(rest), 4)
+        return dist
+
+    def _persona(name: str, weight: float, heavy_first: bool, pool: dict) -> dict:
+        distributions: dict = {}
+        if choice_q:
+            distributions[choice_q.entry_id] = _biased(choice_q.options, heavy_first)
+        if text_q:
+            distributions[text_q.entry_id] = pool
+        return {"name": name, "weight": weight, "distributions": distributions}
+
+    return {
+        "_note": (
+            "Example only — replace names, weights, and answers with ones that fit "
+            "this form. Persona weights must sum to 1.0; give each persona its own "
+            "distinct, on-topic text pool."
+        ),
+        "personas": [
+            _persona("satisfied", 0.7, True,
+                     {"Loved it": 1, "Great experience": 1, "Would recommend": 1}),
+            _persona("unhappy", 0.3, False,
+                     {"Disappointing": 1, "Needs work": 1, "Would not return": 1}),
+        ],
+    }
+
+
 @mcp.tool()
 @tool_errors
 def import_form_schema(url: str) -> dict:
@@ -319,7 +388,10 @@ def import_form_schema(url: str) -> dict:
     preview_fill/fill_form — these are NOT the authoring question_ids) plus a
     suggested_fill_config with uniform distributions. Text questions get an
     empty pool: fill it with sample answers (text -> weight) before
-    generating. Refuses forms that require sign-in.
+    generating. For realistic, correlated data, also returns persona_guidance
+    and a persona_template wired to this form's entry_ids — author personas from
+    those and pass them to preview_fill/fill_form. Refuses forms that require
+    sign-in.
     """
     schema = import_form(url)
     scaffold = scaffold_dict(schema, count=100, seed=42)
@@ -335,6 +407,8 @@ def import_form_schema(url: str) -> dict:
             "mode": "exact",
             "questions": scaffold["questions"],
         },
+        "persona_guidance": PERSONA_GUIDANCE,
+        "persona_template": _persona_template(schema),
     }
 
 
@@ -346,18 +420,26 @@ def preview_fill(
     count: int = 100,
     seed: int = 42,
     mode: Literal["exact", "probabilistic"] = "exact",
+    personas: Optional[List[Persona]] = None,
 ) -> dict:
     """Validate a fill config and preview the generated answers — no submission.
 
     For each question, distribution maps option label -> probability
     (single-choice must sum to 1.0; checkbox values are independent
     probabilities; text questions use sample-answer -> weight pools).
-    Returns realized marginal counts plus the first 5 generated rows.
+
+    Optional `personas` make responses coherent per respondent instead of
+    sampling each question independently: each persona has a `weight` (share of
+    respondents, summing to 1.0) and `distributions` (entry_id -> its own
+    distribution, falling back to the base `questions` distribution for any
+    entry it omits). Use this so one respondent's rating, choices, and free text
+    move together. Returns realized marginal counts, the first 5 generated rows,
+    and `persona_mix` (respondents allocated per persona).
     """
     schema = import_form(url)
-    cfg = _build_config(schema, questions, count, seed, mode)
+    cfg = _build_config(schema, questions, count, seed, mode, personas=personas)
     responses = generate(cfg)
-    return {
+    result = {
         "count": count,
         "seed": seed,
         "mode": mode,
@@ -365,6 +447,9 @@ def preview_fill(
         "marginals": _marginals(cfg, responses),
         "sample_rows": [r.answers for r in responses[:5]],
     }
+    if cfg.personas:
+        result["persona_mix"] = allocate_personas(cfg.personas, count)
+    return result
 
 
 @mcp.tool()
@@ -376,6 +461,7 @@ def fill_form(
     i_own_this_form: bool = False,
     seed: int = 42,
     mode: Literal["exact", "probabilistic"] = "exact",
+    personas: Optional[List[Persona]] = None,
     rate_limit_per_min: float = 20.0,
     jitter_min_seconds: float = 1.0,
     jitter_max_seconds: float = 3.0,
@@ -389,6 +475,9 @@ def fill_form(
     this form. Use dry_run=true first to inspect the payloads without
     submitting anything.
 
+    Optional `personas` make each respondent internally coherent (see
+    preview_fill); omit them for the original independent-per-question sampling.
+
     Submission is rate-limited (default 20/min, so 100 responses take ~6
     minutes); prefer small counts per call. Returns per-run totals and the
     audit CSV path (under ~/.gform/logs).
@@ -396,6 +485,7 @@ def fill_form(
     schema = import_form(url)
     cfg = _build_config(
         schema, questions, count, seed, mode,
+        personas=personas,
         i_own_this_form=i_own_this_form,
         rate_limit_per_min=rate_limit_per_min,
         jitter_seconds=(jitter_min_seconds, jitter_max_seconds),

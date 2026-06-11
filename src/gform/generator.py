@@ -1,18 +1,27 @@
 """Build the deterministic set of responses from a config.
 
-Each question is sampled independently. Columns are generated separately and
-zipped into rows, so questions are uncorrelated by construction. Determinism:
-the same config + seed always yields the same responses.
+Without personas, each question is sampled independently: columns are generated
+separately and zipped into rows, so questions are uncorrelated by construction.
+With personas, respondents are split into archetype blocks and each block is
+generated from that persona's distributions, so one respondent's answers are
+correlated across questions. Either way determinism holds: the same config +
+seed always yields the same responses.
 """
 
 from __future__ import annotations
 
 import random
-from typing import List, Union
+from typing import Dict, List, Union
 
-from .config import Config, QuestionConfig
+from .config import Config, Persona, QuestionConfig
 from .distributions import build_quota_column, largest_remainder, weighted_choices
 from .models import MULTI_CHOICE, TEXT_TYPES, Response
+
+# Per-persona seed stride: a large prime so a persona block's per-column seeds
+# (block_seed + question_index) never collide with the base scheme or with each
+# other, while the within-column seed math (in the helpers below) is reused
+# unchanged so existing single-persona/no-persona seeds keep reproducing.
+_PERSONA_STRIDE = 100_003
 
 
 def _normalize_pool(qc: QuestionConfig) -> QuestionConfig:
@@ -57,13 +66,16 @@ def _checkbox_column(
     return [[label for label in labels if bool_cols[label][i]] for i in range(n)]
 
 
-def generate(config: Config) -> List[Response]:
-    n = config.generation.count
-    seed = config.generation.seed
-    mode = config.generation.mode
+def _generate_block(
+    questions: List[QuestionConfig], n: int, seed: int, mode: str
+) -> List[Response]:
+    """Generate ``n`` rows over the given questions (one independent column each).
 
-    columns: dict[str, List[Union[str, List[str]]]] = {}
-    for idx, qc in enumerate(config.questions):
+    This is the original column-wise engine, factored out so it can run once
+    (no personas) or once per persona block.
+    """
+    columns: Dict[str, List[Union[str, List[str]]]] = {}
+    for idx, qc in enumerate(questions):
         if qc.type in MULTI_CHOICE:
             columns[qc.entry_id] = _checkbox_column(qc, n, seed, idx, mode)
         else:
@@ -77,3 +89,44 @@ def generate(config: Config) -> List[Response]:
     return [
         Response(answers={eid: columns[eid][i] for eid in columns}) for i in range(n)
     ]
+
+
+def _effective_distribution(persona: Persona, qc: QuestionConfig) -> Dict[str, float]:
+    """The persona's override for this question, or the base distribution."""
+    return persona.distributions.get(qc.entry_id, qc.distribution)
+
+
+def allocate_personas(personas: List[Persona], n: int) -> Dict[str, int]:
+    """Apportion ``n`` respondents across personas by weight (sums to exactly n)."""
+    return largest_remainder({p.name: p.weight for p in personas}, n)
+
+
+def generate(config: Config) -> List[Response]:
+    n = config.generation.count
+    seed = config.generation.seed
+    mode = config.generation.mode
+
+    if not config.personas:
+        return _generate_block(config.questions, n, seed, mode)
+
+    # Persona mode: split respondents into archetype blocks and generate each
+    # block from that persona's effective distributions. Each block reuses the
+    # column engine with a strided per-block seed so blocks stay independent and
+    # deterministic.
+    counts = allocate_personas(config.personas, n)
+    rows: List[Response] = []
+    for pi, persona in enumerate(config.personas):
+        k = counts[persona.name]
+        if k == 0:
+            continue
+        block_seed = seed + (pi + 1) * _PERSONA_STRIDE
+        eff_questions = [
+            qc.model_copy(update={"distribution": _effective_distribution(persona, qc)})
+            for qc in config.questions
+        ]
+        rows.extend(_generate_block(eff_questions, k, block_seed, mode))
+
+    # Interleave the blocks so persona order doesn't cluster (keeps preview
+    # samples representative); deterministic via a seeded shuffle.
+    random.Random(seed).shuffle(rows)
+    return rows
