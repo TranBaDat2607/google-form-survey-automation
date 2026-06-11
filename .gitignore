@@ -45,3 +45,6 @@ Thumbs.db
 
 # Submission audit logs written by `gform run` (created at the project root).
 /run-*.csv
+
+# Local-only demo brief (kept on disk for pasting into Copilot, not tracked).
+/DEMO.md
