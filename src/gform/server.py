@@ -343,7 +343,8 @@ def fill_form(
     seed: int = 42,
     mode: Literal["exact", "probabilistic"] = "exact",
     rate_limit_per_min: float = 20.0,
-    jitter_seconds: Tuple[float, float] = (1.0, 3.0),
+    jitter_min_seconds: float = 1.0,
+    jitter_max_seconds: float = 3.0,
     stop_on_error: bool = True,
     dry_run: bool = False,
 ) -> dict:
@@ -363,7 +364,7 @@ def fill_form(
         schema, questions, count, seed, mode,
         i_own_this_form=i_own_this_form,
         rate_limit_per_min=rate_limit_per_min,
-        jitter_seconds=jitter_seconds,
+        jitter_seconds=(jitter_min_seconds, jitter_max_seconds),
         stop_on_error=stop_on_error,
     )
     responses = generate(cfg)

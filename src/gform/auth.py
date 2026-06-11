@@ -112,7 +112,9 @@ def get_credentials(interactive: bool = False) -> Credentials:
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     flow = InstalledAppFlow.from_client_secrets_file(str(cred_file), SCOPES)
-    creds = flow.run_local_server(port=0)
+    # Wait up to 5 minutes for the browser redirect so the unverified-app
+    # consent screens can be clicked through without the flow timing out.
+    creds = flow.run_local_server(port=0, timeout_seconds=300)
     _save_token(creds)
     return creds
 

@@ -166,7 +166,7 @@ def test_fill_form_submits_and_writes_audit_log(tmp_path, monkeypatch):
     )
     result = fill_form(
         URL, _questions(), count=2, i_own_this_form=True,
-        rate_limit_per_min=6000, jitter_seconds=(0, 0),
+        rate_limit_per_min=6000, jitter_min_seconds=0, jitter_max_seconds=0,
     )
 
     assert result["submitted"] == 2
