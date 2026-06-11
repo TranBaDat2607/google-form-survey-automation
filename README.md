@@ -32,10 +32,13 @@ return, which is why `import_form_schema` exists.
 ### 1. Install
 
 ```powershell
-pip install -e ".[dev]"
+pip install nmvv-gform-mcp
 ```
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.10. This puts the `gform-mcp` and `gform-auth` commands on
+your PATH. (Prefer `pipx install nmvv-gform-mcp` to keep it in an isolated
+environment.) To work on the source instead, clone the repo and run
+`pip install -e ".[dev]"`.
 
 ### 2. Google Cloud OAuth (one-time, free — needed only for the authoring tools)
 

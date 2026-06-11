@@ -1,5 +1,5 @@
 [project]
-name = "gform-survey-generator"
+name = "nmvv-gform-mcp"
 version = "0.2.0"
 description = "Google Forms MCP server: authoring via the official Forms API plus deterministic survey-response filling for forms you own."
 requires-python = ">=3.10"
